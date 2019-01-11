@@ -13,7 +13,10 @@ tf.enable_eager_execution()
 class BasicVAE():
 
     def __init__(self, input_shape, NumLatentVars, 
-                 encoder_hidden_units = 200, decoder_hidden_units = 200):
+                 encoder_hidden_units = 200, decoder_hidden_units = 200,
+                 num_samples=1):
+
+        self.num_samples = num_samples
 
         self.input_size = input_size = np.prod(input_shape)
         w1 = tf.Variable(tf.random_normal([input_size, encoder_hidden_units], 0.0, 0.001))
@@ -30,19 +33,26 @@ class BasicVAE():
         return logit
 
     def decoder(self, z):
+        """ 
+        This function expects an input shape of [batch, vector]
+        """
         h = tf.nn.relu(z@self.weights[2])
         logit = h@self.weights[3]
         return logit
 
-    # This function assumes data in the range [0,1]
-    # If l=1 (default), then returns shape (batch_size, input_size)
-    # If l!=1, then returns shape (l, batch_size, input_size)
     def predict(self, X, l=1, return_logit_and_parameters=False):
+        """
+        This function assumes data in the range [0,1]
+        If l=1 (default), then returns shape (batch_size, input_size)
+        If l!=1, then returns shape (l, batch_size, input_size)
+        """
         logit, _ = self._predict(X, l)
         return tf.nn.sigmoid(logit)
 
-    # Function for internal use, returns logit and parameters
     def _predict(self, X, l=1):
+        """
+        Function for internal use, returns logit and parameters
+        """
         parameters_layer = self.encoder(X)
         z_sample, z_parameters = self.g(parameters_layer,num_samples=l)
         #reshape so new batch size is l*original_batch size
@@ -53,8 +63,10 @@ class BasicVAE():
 
         return logit, z_parameters
 
-    # Yields control back every epoch, returning the average ELBO across batches
     def train(self, X, num_epochs=10, batch_size=100):
+        """
+        Yields control back every epoch, returning the average ELBO across batches
+        """
         opt = tf.train.AdagradOptimizer(0.01)
         for i in range(num_epochs):
             loss_history = []
@@ -73,7 +85,7 @@ class BasicVAE():
             yield -np.mean(loss_history)
 
     def ELBO(self, X):
-        logit, z_parameters = self._predict(X)
+        logit, z_parameters = self._predict(X, l=self.num_samples)
         z_mu, z_sigma = z_parameters
         # Separate KL divergence and Expected reconstruction Loss
         logp = self.reconstructionLoss(logit, X)
@@ -82,17 +94,20 @@ class BasicVAE():
         return elbo
 
     def reconstructionLoss(self, logits, labels):
-        # uses my version of sigmoid cross entropy
+        # uses my version of sigmoid cross entropy which supports broadcasting
         cross_entropy = sigmoid_cross_entropy_with_logits(labels=labels,logits=logits)
 
         # Account for multiple samples
-        if(tf.rank(cross_entropy) == 3):
+        if(tf.rank(cross_entropy).numpy() == 3):
             cross_entropy = tf.reduce_mean(cross_entropy,axis=0)
 
-        # Bernoulli loss
+        # Average across
         logp = -tf.reduce_sum(
                 tf.reduce_mean(cross_entropy,axis=0),
                 axis=-1)
+
+        assert(tf.rank(logp).numpy() == 0)
+
         return logp
 
     def KLdivergence(self, z_parameters):
@@ -135,7 +150,7 @@ X_test = tf.reshape(X_test, shape=[-1, 28*28])
 
 # Init
 vae = BasicVAE(input_shape=(28,28), NumLatentVars=30,
-                encoder_hidden_units = 400, decoder_hidden_units = 400)
+                encoder_hidden_units = 400, decoder_hidden_units = 400, num_samples=1)
 
 # Train
 for elbo in vae.train(X,num_epochs=10,batch_size=200):
